@@ -1,7 +1,7 @@
-Soft-DTW(Dynamic Time Warping) in TensorFlow2 including forward and backward computation
+Batch Soft-DTW(Dynamic Time Warping) in TensorFlow2 including forward and backward computation
 ===
 
-Custom TensorFlow2 implementations of forward and backward computation of soft-DTW(Dynamic Time Warping) algorithm, which is proposed in paper 《Soft-DTW: a Differentiable Loss Function for Time-Series》.
+Custom TensorFlow2 implementations of forward and backward computation of soft-DTW(Dynamic Time Warping) algorithm in batch mode, which is proposed in paper 《Soft-DTW: a Differentiable Loss Function for Time-Series》.
 
 test code
 ```python
