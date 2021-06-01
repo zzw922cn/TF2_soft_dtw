@@ -43,3 +43,5 @@ tf.Tensor(
   [1.7456072e-23 1.0000119e+00 1.3087672e-21]
   [0.0000000e+00 0.0000000e+00 1.0000000e+00]]], shape=(1, 4, 3), dtype=float32)
 ```
+
+If you have questions or improvements about the code, welcome to submit issues ASAP!
