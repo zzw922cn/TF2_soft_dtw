@@ -21,8 +21,8 @@ test code
         grad = tape.gradient(soft_dtw_distance, a)
 
     print(eu_distance)
-    print(soft_dtw_distance[:, 1:, 1:])
-    print(grad[:, :-1, :-1])
+    print(soft_dtw_distance)
+    print(grad)
 ```
 
 result
