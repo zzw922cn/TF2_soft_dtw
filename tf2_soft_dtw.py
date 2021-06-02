@@ -80,11 +80,22 @@ def batch_soft_dtw(X, Y, gamma, metric="L2"):
             j = tf.math.floormod(tf.cast(idx, tf.int32), T2+1)  # 列号
 
             def inner_func():
+                #  soft-dtw paper
                 z1 = -1./gamma * r_array.read((i-1)*(T2+1)+(j-1))
-                z2 = -1./gamma * r_array.read((i-1)*(T2+1)+(j))
-                z3 = -1./gamma * r_array.read((i)*(T2+1)+(j-1))
+                z2 = -1./gamma * (128+r_array.read((i-1)*(T2+1)+(j)))
+                z3 = -1./gamma * (128+r_array.read((i)*(T2+1)+(j-1)))
                 soft_min_value = -gamma * tf.math.reduce_logsumexp([z1, z2, z3], axis=0)
                 r_value = tf.cast(delta_array.read((i-1)*T2+(j-1)), tf.float32) + tf.cast(soft_min_value, tf.float32)
+
+                return array.write(idx, tf.cast(r_value, tf.float32))
+
+            def inner_func_v1():
+                #  parallel tacotron2 paper (recommended)
+                z1 = -1./gamma * (array.read((i-1)*(T2+1)+(j-1)) +r_array.read((i-1)*(T2+1)+(j-1)))
+                z2 = -1./gamma * (128+array.read((i-1)*(T2+1)+(j))+r_array.read((i-1)*(T2+1)+(j)))
+                z3 = -1./gamma * (128+array.read((i)*(T2+1)+(j-1))+r_array.read((i)*(T2+1)+(j-1)))
+                soft_min_value = -gamma * tf.math.reduce_logsumexp([z1, z2, z3], axis=0)
+                r_value = tf.cast(soft_min_value, tf.float32)
 
                 return array.write(idx, tf.cast(r_value, tf.float32))
 
@@ -94,7 +105,7 @@ def batch_soft_dtw(X, Y, gamma, metric="L2"):
 
             array = tf.cond(tf.less(i, 1) | tf.less(j, 1),
                 true_fn=outer_func,
-                false_fn=inner_func)
+                false_fn=inner_func_v1)
 
             return idx+1, array
 
@@ -162,8 +173,8 @@ def batch_soft_dtw(X, Y, gamma, metric="L2"):
             e_matrix = e_array.stack()
             e_matrix = tf.cast(tf.reshape(e_matrix, [N, T1+1, T2+1]), tf.float32)
 
-            return e_matrix[:, :-1, :-1]
-        return r_matrix[:, 1:, 1:], grad
+            return e_matrix[:, 1:, 1:]
+        return r_matrix[:, -1, -1], grad
 
     return _batch_soft_dtw_kernel(delta_matrix)
 
