@@ -34,7 +34,7 @@ def batch_distance(X, Y, metric="L1"):
     return res
 
 
-def batch_soft_dtw(X, Y, gamma, metric="L2"):
+def batch_soft_dtw(X, Y, gamma, warp, metric="L2"):
     """ batch模式的soft-DTW距离计算，并带有自定义的梯度（custom gradient） """
 
     N, T1 = tf.shape(X)[0], tf.shape(X)[1]
@@ -80,20 +80,20 @@ def batch_soft_dtw(X, Y, gamma, metric="L2"):
             j = tf.math.floormod(tf.cast(idx, tf.int32), T2+1)  # 列号
 
             def inner_func():
-                #  soft-dtw paper
+                """ Soft-DTW paper's version """
                 z1 = -1./gamma * r_array.read((i-1)*(T2+1)+(j-1))
-                z2 = -1./gamma * (128+r_array.read((i-1)*(T2+1)+(j)))
-                z3 = -1./gamma * (128+r_array.read((i)*(T2+1)+(j-1)))
+                z2 = -1./gamma * (r_array.read((i-1)*(T2+1)+(j)))
+                z3 = -1./gamma * (r_array.read((i)*(T2+1)+(j-1)))
                 soft_min_value = -gamma * tf.math.reduce_logsumexp([z1, z2, z3], axis=0)
                 r_value = tf.cast(delta_array.read((i-1)*T2+(j-1)), tf.float32) + tf.cast(soft_min_value, tf.float32)
 
                 return array.write(idx, tf.cast(r_value, tf.float32))
 
             def inner_func_v1():
-                #  parallel tacotron2 paper (recommended)
+                """ Parallel Tacotron2's version """
                 z1 = -1./gamma * (array.read((i-1)*(T2+1)+(j-1)) +r_array.read((i-1)*(T2+1)+(j-1)))
-                z2 = -1./gamma * (128+array.read((i-1)*(T2+1)+(j))+r_array.read((i-1)*(T2+1)+(j)))
-                z3 = -1./gamma * (128+array.read((i)*(T2+1)+(j-1))+r_array.read((i)*(T2+1)+(j-1)))
+                z2 = -1./gamma * (warp+array.read((i-1)*(T2+1)+(j))+r_array.read((i-1)*(T2+1)+(j)))
+                z3 = -1./gamma * (warp+array.read((i)*(T2+1)+(j-1))+r_array.read((i)*(T2+1)+(j-1)))
                 soft_min_value = -gamma * tf.math.reduce_logsumexp([z1, z2, z3], axis=0)
                 r_value = tf.cast(soft_min_value, tf.float32)
 
@@ -116,8 +116,74 @@ def batch_soft_dtw(X, Y, gamma, metric="L2"):
         r_matrix = tf.reshape(r_matrix, (N, T1+1, T2+1))
         r_matrix_v1 = tf.identity(tf.cast(r_matrix, tf.float32), "r_matrix_v1")
 
+        def grad_v1(dy):
+            """ Parallel Tacotron2's version, I solve it analytically """
+
+            #  [N, T1+1, T2+1]
+            delta_matrix = tf.concat([delta_matrix_v1, tf.zeros([N, T1, 1], tf.float32)], axis=2)
+            delta_matrix = tf.concat([delta_matrix, tf.zeros([N, 1, T2+1], tf.float32)], axis=1)
+            delta_array = tf.TensorArray(tf.float32, size=(T1+1)*(T2+1), clear_after_read=False)
+            delta_array = delta_array.unstack(tf.reshape(delta_matrix, [(T1+1)*(T2+1), N]))
+            delta_array = delta_array.write((T1+1)*(T2+1)-1, tf.zeros((N, )))
+
+            #  [N, T1+2, T2+2]
+            r_matrix = tf.concat([r_matrix_v1, -1000000*tf.ones([N, T1+1, 1], tf.float32)], axis=2)
+            r_matrix = tf.concat([r_matrix, -1000000*tf.ones([N, 1, T2+2], tf.float32)], axis=1)
+            r_array = tf.TensorArray(tf.float32, size=(T1+2)*(T2+2), clear_after_read=False)
+            r_array = r_array.unstack(tf.reshape(r_matrix, [(T1+2)*(T2+2), N]))
+            r_array = r_array.write((T1+2)*(T2+2)-1, r_array.read((T1+1)*(T2+2)-2))
+
+            #  [N, T1+1, T2+1]
+            e_matrix = tf.zeros([N, T1+1, T2+1], tf.float32)
+
+            e_array = tf.TensorArray(tf.float32, size=(T1+1)*(T2+1), clear_after_read=False)
+            e_array = e_array.unstack(tf.reshape(e_matrix, [(T1+1)*(T2+1), N]))
+            e_array = e_array.write((T1+1)*(T2+1)-1, tf.ones((N, )))
+
+            grad_array = tf.TensorArray(tf.float32, size=(T1+1)*(T2+1), clear_after_read=False)
+            grad_array = grad_array.unstack(tf.reshape(e_matrix, [(T1+1)*(T2+1), N]))
+            grad_array = grad_array.write((T1+1)*(T2+1)-1, tf.ones((N, )))
+
+            def cond(idx, array, grad_array):
+                return idx > 0
+
+            def body(idx, array, grad_array):
+                #  delta_array [N, T1+1, T2+1]
+                #  r_array [N, T1+2, T2+2]
+                #  e_array [N, T1+1, T2+1]
+
+                j = tf.cast(tf.divide(idx, T1+1), tf.int32)  # 行号
+                i = tf.math.floormod(tf.cast(idx, tf.int32), T1+1)  # 列号
+
+                def inner_func():
+
+                    a = tf.math.exp(1./gamma * (r_array.read((i+1)*(T2+2)+j)-r_array.read(i*(T2+2)+j)-delta_array.read(i*(T2+1)+(j-1))-warp))
+                    b = tf.math.exp(1./gamma * (r_array.read((i)*(T2+2)+(j+1))-r_array.read(i*(T2+2)+j)-delta_array.read((i-1)*(T2+1)+j)-warp))
+                    c = tf.math.exp(1./gamma * (r_array.read((i+1)*(T2+2)+(j+1))-r_array.read(i*(T2+2)+j)-delta_array.read((i)*(T2+1)+j)))
+                    e_value = array.read(i*(T2+1)+(j-1))*a + array.read((i-1)*(T2+1)+j)*b + array.read(i*(T2+1)+j)*c
+
+
+                    return array.write((i-1)*(T2+1)+(j-1), e_value), grad_array.write((i-1)*(T2+1)+j-1, array.read((i-1)*(T2+1)+j))
+
+                def outer_func():
+
+                    return array, grad_array
+
+                array, grad_array = tf.cond((i>0) & (j>0),
+                    true_fn=inner_func,
+                    false_fn=outer_func)
+
+                return idx-1, array, grad_array
+
+            _, e_array, grad_array = tf.while_loop(cond, body, ((T1+1)*(T2+1), e_array, grad_array))
+            grad_matrix = grad_array.stack()
+            grad_matrix = tf.cast(tf.reshape(grad_matrix, [N, T1+1, T2+1]), tf.float32)
+
+            return tf.tile(dy[:, tf.newaxis, tf.newaxis], [1, T1, T2])*grad_matrix[:, 1:, 1:]
+
         #  自定义梯度（custom gradient）
         def grad(dy):
+            """ Soft-DTW paper's version, I follow the paper's equations """
 
             #  [N, T1+1, T2+1]
             delta_matrix = tf.concat([delta_matrix_v1, tf.zeros([N, T1, 1], tf.float32)], axis=2)
@@ -173,8 +239,10 @@ def batch_soft_dtw(X, Y, gamma, metric="L2"):
             e_matrix = e_array.stack()
             e_matrix = tf.cast(tf.reshape(e_matrix, [N, T1+1, T2+1]), tf.float32)
 
-            return e_matrix[:, 1:, 1:]
-        return r_matrix[:, -1, -1], grad
+            return tf.tile(dy[:, tf.newaxis, tf.newaxis], [1, T1, T2])*e_matrix[:, 1:, 1:]
+
+        #  I use Parallel Tacotron2's version for TTS training
+        return r_matrix[:, -1, -1], grad_v1
 
     return _batch_soft_dtw_kernel(delta_matrix)
 
