@@ -163,7 +163,7 @@ def batch_soft_dtw(X, Y, gamma, warp, metric="L2"):
                     e_value = array.read(i*(T2+1)+(j-1))*a + array.read((i-1)*(T2+1)+j)*b + array.read(i*(T2+1)+j)*c
 
 
-                    return array.write((i-1)*(T2+1)+(j-1), e_value), grad_array.write((i-1)*(T2+1)+j-1, array.read((i-1)*(T2+1)+j))
+                    return array.write((i-1)*(T2+1)+(j-1), e_value), grad_array.write((i-1)*(T2+1)+j-1, array.read((i-1)*(T2+1)+j)+array.read(i*(T2+1)+(j-1))+array.read(i*(T2+1)+j))
 
                 def outer_func():
 
